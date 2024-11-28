@@ -1,0 +1,264 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:go_router/go_router.dart';
+import 'package:uuid/uuid.dart';
+import 'package:geolocator/geolocator.dart';
+
+final routerProvider = Provider((ref) => GoRouter(
+  routes: [
+    GoRoute(
+      path: '/',
+      builder: (context, state) => const EVStationFinder(),
+    ),
+  ],
+));
+
+final stationsProvider = StateNotifierProvider<StationNotifier, List<EVStation>>((ref) => StationNotifier());
+
+class StationNotifier extends StateNotifier<List<EVStation>> {
+  StationNotifier() : super([
+    EVStation(id: 1, name: "Central Station", location: LatLng(51.505, -0.09), type: "Fast Charging", available: true),
+    EVStation(id: 2, name: "North Point", location: LatLng(51.51, -0.1), type: "Super Charging", available: true),
+    EVStation(id: 3, name: "South Gate", location: LatLng(51.5, -0.08), type: "Regular", available: false),
+  ]);
+
+  void filterStations(String searchTerm) {
+    if (searchTerm.isEmpty) {
+      state = [...state];
+      return;
+    }
+    final filtered = state.where((station) => 
+      station.name.toLowerCase().contains(searchTerm.toLowerCase())).toList();
+    state = filtered;
+  }
+}
+
+class EVStation {
+  final int id;
+  final String name;
+  final LatLng location;
+  final String type;
+  final bool available;
+
+  EVStation({
+    required this.id,
+    required this.name,
+    required this.location,
+    required this.type,
+    required this.available,
+  });
+}
+
+class EVStationFinder extends HookConsumerWidget {
+  const EVStationFinder({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final stations = ref.watch(stationsProvider);
+    final searchController = useTextEditingController();
+    final rangeValue = useState(5.0);
+    final mapController = useState(MapController());
+
+    return Scaffold(
+      body: Column(
+        children: [
+          _buildNavBar(context),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    flex: 1,
+                    child: _buildSidebar(
+                      context,
+                      searchController,
+                      rangeValue,
+                      stations,
+                      ref,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    flex: 2,
+                    child: _buildMap(stations, mapController.value),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNavBar(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.1),
+            blurRadius: 4,
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: const [
+              Icon(Icons.electric_bolt, color: Colors.green),
+              SizedBox(width: 8),
+              Text(
+                'EV Station Finder',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          ElevatedButton.icon(
+            onPressed: () async {
+              final position = await Geolocator.getCurrentPosition();
+              // Handle location
+            },
+            icon: const Icon(Icons.location_on),
+            label: const Text('My Location'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSidebar(
+    BuildContext context,
+    TextEditingController searchController,
+    ValueNotifier<double> rangeValue,
+    List<EVStation> stations,
+    WidgetRef ref,
+  ) {
+    return Column(
+      children: [
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                TextField(
+                  controller: searchController,
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.search),
+                    hintText: 'Search location...',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (value) {
+                    ref.read(stationsProvider.notifier).filterStations(value);
+                  },
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Range (km)'),
+                    Text('${rangeValue.value.toInt()}'),
+                  ],
+                ),
+                Slider(
+                  value: rangeValue.value,
+                  min: 1,
+                  max: 50,
+                  onChanged: (value) {
+                    rangeValue.value = value;
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Expanded(
+          child: Card(
+            child: ListView.builder(
+              itemCount: stations.length,
+              itemBuilder: (context, index) {
+                final station = stations[index];
+                return ListTile(
+                  title: Text(station.name),
+                  subtitle: Text(station.type),
+                  trailing: Chip(
+                    label: Text(
+                      station.available ? 'Available' : 'Occupied',
+                      style: TextStyle(
+                        color: station.available ? Colors.green[800] : Colors.red[800],
+                      ),
+                    ),
+                    backgroundColor: station.available
+                        ? Colors.green[100]
+                        : Colors.red[100],
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMap(List<EVStation> stations, MapController mapController) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: FlutterMap(
+        mapController: mapController,
+        options: MapOptions(
+          center: LatLng(51.505, -0.09),
+          zoom: 13,
+        ),
+        children: [
+          TileLayer(
+            urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            subdomains: const ['a', 'b', 'c'],
+          ),
+          MarkerLayer(
+            markers: stations
+                .map(
+                  (station) => Marker(
+                    point: station.location,
+                    builder: (ctx) => const Icon(
+                      Icons.location_on,
+                      color: Colors.red,
+                    ),
+                  ),
+                )
+                .toList(),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+void main() {
+  runApp(
+    ProviderScope(
+      child: MaterialApp.router(
+        routerConfig: routerProvider,
+        title: 'EV Station Finder',
+        theme: ThemeData(
+          primarySwatch: Colors.green,
+          fontFamily: 'Inter',
+        ),
+      ),
+    ),
+  );
+}
